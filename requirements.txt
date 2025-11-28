@@ -1,3 +1,4 @@
 flask
 line-bot-sdk
 googletrans==4.0.0-rc1
+gtts==2.5.0
