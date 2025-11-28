@@ -101,23 +101,33 @@ def callback():
 @app.route("/audio/<audio_id>", methods=['GET'])
 def serve_audio(audio_id):
     """提供音訊檔案的下載端點"""
+    # 在鎖內複製音訊數據，確保在 send_file 異步傳輸時數據不會被清理
+    audio_data = None
     with cache_lock:
         if audio_id in audio_cache:
             audio_data, _ = audio_cache[audio_id]
-            audio_buffer = io.BytesIO(audio_data)
-            audio_buffer.seek(0)
-            return send_file(
-                audio_buffer,
-                mimetype='audio/mpeg',
-                as_attachment=False
-            )
+            # 複製數據到新的 bytes 對象，避免在鎖外訪問時數據被修改
+            audio_data = bytes(audio_data)
+    
+    if audio_data:
+        audio_buffer = io.BytesIO(audio_data)
+        audio_buffer.seek(0)
+        return send_file(
+            audio_buffer,
+            mimetype='audio/mpeg',
+            as_attachment=False
+        )
     abort(404)
 
 def generate_audio(text, lang):
-    """生成語音檔案並返回二進位資料"""
+    """生成語音檔案並返回 (音訊資料, 實際使用的文字長度)"""
     # 檢查文字長度（gTTS 限制約 5000 字元）
-    if len(text) > 5000:
+    original_length = len(text)
+    if original_length > 5000:
         text = text[:5000] + "..."
+        actual_length = len(text)  # 實際使用的文字長度（包含 "...")
+    else:
+        actual_length = original_length
     
     # 檢查空文字
     if not text or not text.strip():
@@ -127,7 +137,7 @@ def generate_audio(text, lang):
     audio_buffer = io.BytesIO()
     tts.write_to_fp(audio_buffer)
     audio_buffer.seek(0)
-    return audio_buffer.getvalue()
+    return (audio_buffer.getvalue(), actual_length)
 
 def get_tts_lang(lang_code):
     """將語言代碼轉換為 gTTS 支援的語言代碼"""
@@ -190,7 +200,7 @@ def handle_message(event):
         # 生成語音
         try:
             tts_lang = get_tts_lang(dest_lang)
-            audio_data = generate_audio(translated_text, tts_lang)
+            audio_data, actual_text_length = generate_audio(translated_text, tts_lang)
             
             # 儲存音訊到快取
             audio_id = save_audio_to_cache(audio_data)
@@ -207,15 +217,18 @@ def handle_message(event):
                     # 如果都沒有，跳過語音功能
                     raise ValueError("BASE_URL 未設定，無法生成語音 URL")
             
-            # 構建完整的音訊 URL（必須是 HTTPS）
+            # 構建完整的音訊 URL（必須是 HTTPS，LINE Bot 要求）
             if not base_url.startswith('http'):
                 base_url = f"https://{base_url}"
+            elif base_url.startswith('http://'):
+                # 將 HTTP 轉換為 HTTPS（LINE Bot 要求 HTTPS）
+                base_url = base_url.replace('http://', 'https://', 1)
             
             audio_url = f"{base_url.rstrip('/')}/audio/{audio_id}"
             
-            # 計算音訊長度（gTTS 語速約每秒 5-10 字元）
-            # 使用更準確的估算：中文和越南語約每秒 8 字元
-            duration = max(1000, int(len(translated_text) * 125))  # 每個字元約 125 毫秒
+            # 計算音訊長度（使用實際使用的文字長度，確保與音訊檔案匹配）
+            # gTTS 語速約每秒 5-10 字元，使用更準確的估算：中文和越南語約每秒 8 字元
+            duration = max(1000, int(actual_text_length * 125))  # 每個字元約 125 毫秒
             
             # 添加語音訊息
             audio_message = AudioMessage(
