@@ -283,6 +283,8 @@ def handle_message(event):
         except:
             pass  # 如果連回覆都失敗，就忽略
 
+# 生產環境使用 gunicorn，開發環境可以直接運行
 if __name__ == "__main__":
     port = int(os.getenv('PORT', 8080))
-    app.run(host='0.0.0.0', port=port)
+    # 僅在開發環境使用 Flask 內建伺服器
+    app.run(host='0.0.0.0', port=port, debug=False)
