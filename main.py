@@ -86,8 +86,9 @@ def serve_audio(audio_id):
     with cache_lock:
         if audio_id in audio_cache:
             entry = audio_cache[audio_id]
-            audio_data = bytes(entry[0]) if len(entry) > 0 else None
-            audio_format = entry[2] if len(entry) > 2 else 'mp3'
+            if len(entry) >= 1:
+                audio_data = bytes(entry[0])
+                audio_format = entry[2] if len(entry) >= 3 else 'mp3'
     if not audio_data:
         abort(404)
     mimetype = 'audio/mp4' if audio_format == 'm4a' else 'audio/mpeg'
