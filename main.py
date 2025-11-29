@@ -27,23 +27,15 @@ url_lock = threading.Lock()
 
 # 清理過期音訊檔案的函數
 _last_cleanup_time = None
-_cleanup_lock = threading.Lock()  # 用於保護 _last_cleanup_time 的鎖
-
 def cleanup_old_audio():
     """清理超過 1 小時的舊音訊檔案（每 10 分鐘執行一次）"""
     global _last_cleanup_time
     current_time = datetime.now()
     
-    # 在鎖內檢查和更新時間戳，確保線程安全
-    with _cleanup_lock:
-        # 每 10 分鐘才執行一次清理，避免頻繁操作
-        if _last_cleanup_time and (current_time - _last_cleanup_time) < timedelta(minutes=10):
-            return
-        
-        # 更新時間戳（在鎖內）
-        _last_cleanup_time = current_time
+    # 每 10 分鐘才執行一次清理，避免頻繁操作
+    if _last_cleanup_time and (current_time - _last_cleanup_time) < timedelta(minutes=10):
+        return
     
-    # 在 cache_lock 內執行實際清理操作
     with cache_lock:
         keys_to_delete = [
             key for key, (_, timestamp) in audio_cache.items()
@@ -51,6 +43,8 @@ def cleanup_old_audio():
         ]
         for key in keys_to_delete:
             del audio_cache[key]
+    
+    _last_cleanup_time = current_time
 
 def get_base_url():
     """獲取應用基礎 URL（線程安全）"""
