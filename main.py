@@ -2,7 +2,7 @@
 from flask import Flask, request, abort, send_file
 from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
-from linebot.models import MessageEvent, TextMessage, TextSendMessage, AudioSendMessage
+from linebot.models import MessageEvent, TextMessage, TextSendMessage, AudioSendMessage, FollowEvent
 from googletrans import Translator
 from gtts import gTTS
 import os
@@ -142,6 +142,33 @@ def save_audio_to_cache(audio_data, audio_format='m4a'):
         audio_cache[audio_id] = (audio_data, datetime.now(), audio_format)
     cleanup_old_audio()
     return audio_id
+
+@handler.add(FollowEvent)
+def handle_follow(event):
+    """處理用戶加入好友事件 - 發送歡迎訊息"""
+    greeting_text = """你好！我是越南語-繁體中文翻譯機器人 🤖
+
+我可以幫你：
+• 自動翻譯越南語 ↔ 繁體中文
+• 將翻譯結果轉換為語音播放 🔊
+
+使用方法：
+直接輸入要翻譯的文字，我會自動檢測語言並翻譯！
+
+支援的語言：
+🇻🇳 越南語
+🇹🇼 繁體中文
+🇨🇳 簡體中文
+
+試試看吧！"""
+    
+    try:
+        line_bot_api.reply_message(
+            event.reply_token,
+            TextSendMessage(text=greeting_text)
+        )
+    except Exception as e:
+        print(f"發送歡迎訊息錯誤: {e}")
 
 @handler.add(MessageEvent, message=TextMessage)
 def handle_message(event):
