@@ -104,6 +104,15 @@ def callback():
 
     return 'OK'
 
+@app.route("/", methods=['GET'])
+def health_check():
+    """健康檢查端點"""
+    return {
+        "status": "ok",
+        "service": "LINE Bot Translation Service",
+        "audio_endpoint": "/audio/<audio_id>"
+    }
+
 @app.route("/audio/<audio_id>", methods=['GET'])
 def serve_audio(audio_id):
     """提供音訊檔案的下載端點"""
@@ -124,10 +133,18 @@ def serve_audio(audio_id):
             as_attachment=False
         )
         # 添加必要的 headers 確保 LINE Bot 可以正確訪問
-        response.headers['Content-Type'] = 'audio/mpeg'
+        # LINE Bot 要求音訊檔案必須可訪問且格式正確
+        # 注意：LINE Bot 可能更偏好 M4A 格式，但目前使用 MP3
+        response.headers['Content-Type'] = 'audio/mpeg; charset=binary'
         response.headers['Content-Length'] = str(len(audio_data))
         response.headers['Accept-Ranges'] = 'bytes'
         response.headers['Cache-Control'] = 'public, max-age=3600'
+        # 添加 CORS headers（如果需要）
+        response.headers['Access-Control-Allow-Origin'] = '*'
+        # 確保音訊檔案可以正確下載（inline 表示在瀏覽器中播放）
+        response.headers['Content-Disposition'] = 'inline; filename="audio.mp3"'
+        # 添加額外的 headers 確保兼容性
+        response.headers['X-Content-Type-Options'] = 'nosniff'
         return response
     abort(404)
 
@@ -143,13 +160,23 @@ def generate_audio(text, lang):
     
     # 檢查空文字
     if not text or not text.strip():
-        raise ValueError("文字內容為空")
+        raise ValueError("No text to send to TTS API")
     
-    tts = gTTS(text=text, lang=lang, slow=False)
-    audio_buffer = io.BytesIO()
-    tts.write_to_fp(audio_buffer)
-    audio_buffer.seek(0)
-    return (audio_buffer.getvalue(), actual_length)
+    try:
+        tts = gTTS(text=text, lang=lang, slow=False)
+        audio_buffer = io.BytesIO()
+        tts.write_to_fp(audio_buffer)
+        audio_buffer.seek(0)
+        audio_data = audio_buffer.getvalue()
+        
+        # 驗證音訊資料不為空
+        if not audio_data or len(audio_data) == 0:
+            raise ValueError("生成的音訊資料為空")
+        
+        return (audio_data, actual_length)
+    except Exception as e:
+        print(f"gTTS 生成錯誤: {e}")
+        raise
 
 def get_tts_lang(lang_code):
     """將語言代碼轉換為 gTTS 支援的語言代碼"""
@@ -245,6 +272,7 @@ def handle_message(event):
             # 添加語音訊息（使用 AudioSendMessage 發送音訊給用戶）
             # LINE Bot 要求音訊 URL 必須可公開訪問且使用 HTTPS
             # 注意：音訊檔案必須是 MP3 或 M4A 格式，且大小不超過 10MB
+            # duration 必須是實際音訊長度（毫秒）
             audio_message = AudioSendMessage(
                 original_content_url=audio_url,
                 duration=duration
@@ -253,6 +281,7 @@ def handle_message(event):
             
             # 調試日誌
             print(f"語音訊息已生成: URL={audio_url}, Duration={duration}ms, Size={len(audio_data)} bytes")
+            print(f"音訊 URL 測試: 請在瀏覽器中打開 {audio_url} 確認可以下載")
             
         except Exception as e:
             # 如果語音生成失敗，只發送文字（不影響主要功能）
