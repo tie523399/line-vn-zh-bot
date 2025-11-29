@@ -121,7 +121,8 @@ def generate_audio(text, lang, format_type='m4a'):
         try:
             audio_segment = AudioSegment.from_mp3(io.BytesIO(audio_data))
             m4a_buffer = io.BytesIO()
-            audio_segment.export(m4a_buffer, format="m4a", codec="aac", bitrate="64k")
+            # 使用 'ipod' 格式（ffmpeg 支持），這會生成 M4A/AAC 格式
+            audio_segment.export(m4a_buffer, format="ipod", codec="aac", bitrate="64k")
             audio_data = m4a_buffer.getvalue()
             print(f"音訊已轉換為 M4A，大小: {len(audio_data)} bytes")
         except Exception as e:
