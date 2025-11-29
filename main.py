@@ -118,11 +118,17 @@ def serve_audio(audio_id):
     if audio_data:
         audio_buffer = io.BytesIO(audio_data)
         audio_buffer.seek(0)
-        return send_file(
+        response = send_file(
             audio_buffer,
             mimetype='audio/mpeg',
             as_attachment=False
         )
+        # 添加必要的 headers 確保 LINE Bot 可以正確訪問
+        response.headers['Content-Type'] = 'audio/mpeg'
+        response.headers['Content-Length'] = str(len(audio_data))
+        response.headers['Accept-Ranges'] = 'bytes'
+        response.headers['Cache-Control'] = 'public, max-age=3600'
+        return response
     abort(404)
 
 def generate_audio(text, lang):
@@ -237,11 +243,16 @@ def handle_message(event):
             duration = max(1000, int(actual_text_length * 125))  # 每個字元約 125 毫秒
             
             # 添加語音訊息（使用 AudioSendMessage 發送音訊給用戶）
+            # LINE Bot 要求音訊 URL 必須可公開訪問且使用 HTTPS
+            # 注意：音訊檔案必須是 MP3 或 M4A 格式，且大小不超過 10MB
             audio_message = AudioSendMessage(
                 original_content_url=audio_url,
                 duration=duration
             )
             messages.append(audio_message)
+            
+            # 調試日誌
+            print(f"語音訊息已生成: URL={audio_url}, Duration={duration}ms, Size={len(audio_data)} bytes")
             
         except Exception as e:
             # 如果語音生成失敗，只發送文字（不影響主要功能）
