@@ -30,7 +30,7 @@ _last_cleanup_time = None
 _cleanup_lock = threading.Lock()  # 用於保護 _last_cleanup_time 的鎖
 
 def cleanup_old_audio():
-    """清理超過 1 小時的舊音訊檔案（每 10 分鐘執行一次）"""
+    """清理超過 24 小時的舊音訊檔案（每 10 分鐘執行一次）"""
     global _last_cleanup_time
     current_time = datetime.now()
     
@@ -44,10 +44,11 @@ def cleanup_old_audio():
         _last_cleanup_time = current_time
     
     # 在 cache_lock 內執行實際清理操作
+    # 延長清理時間到 24 小時，確保 LINE 客戶端有足夠時間下載
     with cache_lock:
         keys_to_delete = [
             key for key, (_, timestamp) in audio_cache.items()
-            if current_time - timestamp > timedelta(hours=1)
+            if current_time - timestamp > timedelta(hours=24)
         ]
         for key in keys_to_delete:
             del audio_cache[key]
@@ -135,7 +136,7 @@ def serve_audio(audio_id):
         # 添加必要的 headers 確保 LINE Bot 可以正確訪問
         # LINE Bot 要求音訊檔案必須可訪問且格式正確
         # 注意：LINE Bot 可能更偏好 M4A 格式，但目前使用 MP3
-        response.headers['Content-Type'] = 'audio/mpeg; charset=binary'
+        response.headers['Content-Type'] = 'audio/mpeg'
         response.headers['Content-Length'] = str(len(audio_data))
         response.headers['Accept-Ranges'] = 'bytes'
         response.headers['Cache-Control'] = 'public, max-age=3600'
@@ -282,6 +283,10 @@ def handle_message(event):
             # 調試日誌
             print(f"語音訊息已生成: URL={audio_url}, Duration={duration}ms, Size={len(audio_data)} bytes")
             print(f"音訊 URL 測試: 請在瀏覽器中打開 {audio_url} 確認可以下載")
+            # 驗證音訊資料開頭是否為有效的 MP3 標記
+            if len(audio_data) > 3:
+                mp3_header = audio_data[:3]
+                print(f"音訊檔案開頭標記: {mp3_header.hex() if isinstance(mp3_header, bytes) else 'unknown'}")
             
         except Exception as e:
             # 如果語音生成失敗，只發送文字（不影響主要功能）
@@ -312,8 +317,10 @@ def handle_message(event):
         except:
             pass  # 如果連回覆都失敗，就忽略
 
-# 生產環境使用 gunicorn，開發環境可以直接運行
+# 生產環境使用 gunicorn（通過 Procfile 啟動）
+# 開發環境可以直接運行此文件
 if __name__ == "__main__":
     port = int(os.getenv('PORT', 8080))
-    # 僅在開發環境使用 Flask 內建伺服器
+    # 僅在本地開發時使用 Flask 內建伺服器
+    # Railway 會使用 Procfile 中的 gunicorn 命令
     app.run(host='0.0.0.0', port=port, debug=False)
