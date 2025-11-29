@@ -11,6 +11,14 @@ import uuid
 import threading
 from datetime import datetime, timedelta
 
+# 嘗試導入 pydub 用於格式轉換（如果可用）
+try:
+    from pydub import AudioSegment
+    PYDUB_AVAILABLE = True
+except ImportError:
+    PYDUB_AVAILABLE = False
+    print("警告: pydub 未安裝，無法轉換為 M4A 格式")
+
 app = Flask(__name__)
 
 line_bot_api = LineBotApi(os.getenv('LINE_CHANNEL_ACCESS_TOKEN'))
@@ -43,13 +51,16 @@ def cleanup_old_audio():
         # 更新時間戳（在鎖內，確保原子性）
         _last_cleanup_time = current_time
     
-    # 在 cache_lock 內執行實際清理操作
+        # 在 cache_lock 內執行實際清理操作
     # 延長清理時間到 24 小時，確保 LINE 客戶端有足夠時間下載
     with cache_lock:
-        keys_to_delete = [
-            key for key, (_, timestamp) in audio_cache.items()
-            if current_time - timestamp > timedelta(hours=24)
-        ]
+        keys_to_delete = []
+        for key, cache_entry in audio_cache.items():
+            # 處理舊格式 (data, timestamp) 和新格式 (data, timestamp, format)
+            if len(cache_entry) >= 2:
+                timestamp = cache_entry[1]
+                if current_time - timestamp > timedelta(hours=24):
+                    keys_to_delete.append(key)
         for key in keys_to_delete:
             del audio_cache[key]
 
@@ -119,38 +130,61 @@ def serve_audio(audio_id):
     """提供音訊檔案的下載端點"""
     # 在鎖內複製音訊數據，確保在 send_file 異步傳輸時數據不會被清理
     audio_data = None
+    audio_format = 'mp3'  # 預設格式
     with cache_lock:
         if audio_id in audio_cache:
-            audio_data, _ = audio_cache[audio_id]
+            cache_entry = audio_cache[audio_id]
+            # 檢查快取格式：可能是 (data, timestamp) 或 (data, timestamp, format)
+            if len(cache_entry) == 3:
+                audio_data, _, audio_format = cache_entry
+            else:
+                audio_data, _ = cache_entry
             # 複製數據到新的 bytes 對象，避免在鎖外訪問時數據被修改
             audio_data = bytes(audio_data)
     
     if audio_data:
         audio_buffer = io.BytesIO(audio_data)
         audio_buffer.seek(0)
+        
+        # 根據格式設置正確的 mimetype 和 filename
+        if audio_format == 'm4a':
+            mimetype = 'audio/mp4'
+            filename = 'audio.m4a'
+        else:
+            mimetype = 'audio/mpeg'
+            filename = 'audio.mp3'
+        
         response = send_file(
             audio_buffer,
-            mimetype='audio/mpeg',
+            mimetype=mimetype,
             as_attachment=False
         )
         # 添加必要的 headers 確保 LINE Bot 可以正確訪問
-        # LINE Bot 要求音訊檔案必須可訪問且格式正確
-        # 注意：LINE Bot 可能更偏好 M4A 格式，但目前使用 MP3
-        response.headers['Content-Type'] = 'audio/mpeg'
+        # iOS 版本的 LINE 需要 M4A 格式（AAC 編碼）
+        response.headers['Content-Type'] = mimetype
         response.headers['Content-Length'] = str(len(audio_data))
         response.headers['Accept-Ranges'] = 'bytes'
         response.headers['Cache-Control'] = 'public, max-age=3600'
         # 添加 CORS headers（如果需要）
         response.headers['Access-Control-Allow-Origin'] = '*'
         # 確保音訊檔案可以正確下載（inline 表示在瀏覽器中播放）
-        response.headers['Content-Disposition'] = 'inline; filename="audio.mp3"'
+        response.headers['Content-Disposition'] = f'inline; filename="{filename}"'
         # 添加額外的 headers 確保兼容性
         response.headers['X-Content-Type-Options'] = 'nosniff'
         return response
     abort(404)
 
-def generate_audio(text, lang):
-    """生成語音檔案並返回 (音訊資料, 實際使用的文字長度)"""
+def generate_audio(text, lang, format_type='mp3'):
+    """生成語音檔案並返回 (音訊資料, 實際使用的文字長度, 格式類型)
+    
+    Args:
+        text: 要轉換的文字
+        lang: 語言代碼
+        format_type: 輸出格式 ('mp3' 或 'm4a')
+    
+    Returns:
+        (audio_data, actual_length, format_type)
+    """
     # 檢查文字長度（gTTS 限制約 5000 字元）
     original_length = len(text)
     if original_length > 5000:
@@ -164,6 +198,7 @@ def generate_audio(text, lang):
         raise ValueError("No text to send to TTS API")
     
     try:
+        # 使用 gTTS 生成 MP3
         tts = gTTS(text=text, lang=lang, slow=False)
         audio_buffer = io.BytesIO()
         tts.write_to_fp(audio_buffer)
@@ -174,7 +209,22 @@ def generate_audio(text, lang):
         if not audio_data or len(audio_data) == 0:
             raise ValueError("生成的音訊資料為空")
         
-        return (audio_data, actual_length)
+        # 如果需要 M4A 格式且 pydub 可用，進行轉換
+        if format_type == 'm4a' and PYDUB_AVAILABLE:
+            try:
+                # 從 MP3 轉換為 M4A（AAC 編碼）
+                audio_segment = AudioSegment.from_mp3(io.BytesIO(audio_data))
+                m4a_buffer = io.BytesIO()
+                # 使用 AAC 編碼導出為 M4A
+                audio_segment.export(m4a_buffer, format="m4a", codec="aac", bitrate="64k")
+                m4a_buffer.seek(0)
+                audio_data = m4a_buffer.getvalue()
+                print(f"音訊已轉換為 M4A 格式，大小: {len(audio_data)} bytes")
+            except Exception as e:
+                print(f"M4A 轉換失敗，使用原始 MP3: {e}")
+                format_type = 'mp3'  # 轉換失敗時回退到 MP3
+        
+        return (audio_data, actual_length, format_type)
     except Exception as e:
         print(f"gTTS 生成錯誤: {e}")
         raise
@@ -189,11 +239,12 @@ def get_tts_lang(lang_code):
     }
     return lang_map.get(lang_code, 'vi')
 
-def save_audio_to_cache(audio_data):
+def save_audio_to_cache(audio_data, audio_format='mp3'):
     """將音訊資料儲存到快取並返回 ID"""
     audio_id = str(uuid.uuid4())
     with cache_lock:
-        audio_cache[audio_id] = (audio_data, datetime.now())
+        # 儲存格式：(audio_data, timestamp, format_type)
+        audio_cache[audio_id] = (audio_data, datetime.now(), audio_format)
     cleanup_old_audio()
     return audio_id
 
@@ -240,10 +291,13 @@ def handle_message(event):
         # 生成語音
         try:
             tts_lang = get_tts_lang(dest_lang)
-            audio_data, actual_text_length = generate_audio(translated_text, tts_lang)
+            # 使用 M4A 格式以確保 iOS 兼容性
+            audio_data, actual_text_length, audio_format = generate_audio(
+                translated_text, tts_lang, format_type='m4a'
+            )
             
-            # 儲存音訊到快取
-            audio_id = save_audio_to_cache(audio_data)
+            # 儲存音訊到快取（包含格式類型）
+            audio_id = save_audio_to_cache(audio_data, audio_format)
             
             # 獲取音訊 URL
             base_url = get_base_url()
