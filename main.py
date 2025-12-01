@@ -76,7 +76,34 @@ def callback():
 
 @app.route("/", methods=['GET'])
 def health_check():
-    return {"status": "ok", "service": "LINE Bot Translation Service"}
+    """健康檢查端點，同時顯示服務資訊和聯繫方式"""
+    return {
+        "status": "ok",
+        "service": "LINE Bot Translation Service",
+        "description": "免費越南語-繁體中文翻譯機器人，支援語音播放",
+        "features": [
+            "自動翻譯越南語 ↔ 繁體中文",
+            "簡體中文 → 越南語",
+            "文字轉語音播放"
+        ],
+        "usage": "加好友關注即可免費使用，直接輸入文字即可翻譯",
+        "contact": {
+            "id": "0002738",
+            "phone": "0963858005",
+            "services": [
+                "網站開發",
+                "程序開發",
+                "機器人開發",
+                "AI 程序開發",
+                "廣告服務"
+            ]
+        },
+        "endpoints": {
+            "health": "/",
+            "webhook": "/callback",
+            "audio": "/audio/<audio_id>"
+        }
+    }
 
 @app.route("/audio/<audio_id>", methods=['GET'])
 def serve_audio(audio_id):
