@@ -45,3 +45,6 @@ Thumbs.db
 # Railway
 .railway/
 
+# 生成的貼文文件
+post_*.txt
+
